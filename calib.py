@@ -16,7 +16,7 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-import json
+import copy
 from tqdm import tqdm 
 
 from conf import settings
@@ -58,7 +58,6 @@ if __name__ == '__main__':
     parser.add_argument('-weights', type=str, required=True, help='the weights file you want to test')
     parser.add_argument('-gpu', action='store_true', default=False, help='use gpu or not')
     parser.add_argument('-b', type=int, default=16, help='batch size for dataloader')
-    parser.add_argument('-ignore_quantization', action='store_true', default=False, help='import quantization backend')
     args = parser.parse_args()
 
     PATH = os.getenv("DQPATH", '')
@@ -68,34 +67,23 @@ if __name__ == '__main__':
 
     from backend import convert_model, QuantMode
 
-    mode = eval(os.getenv("dq", "0"))
     corrupt = eval(os.getenv("corrupt", "0")) == 1
     per_channel = eval(os.getenv("ch", "1")) == 1
 
     sampling_stride = eval(os.getenv("s_s", "1")) 
-    c_std = eval(os.getenv("c_std", "3"))
-    l_std = eval(os.getenv("l_std", "3"))
 
-    cal_size = eval(os.getenv("cal_size", "16"))
+    cal_size = eval(os.getenv("cal_size", "256"))
     verb = eval(os.getenv("verb", "0"))
 
 
     print()
-    print("LOG+++++ ESTIMATE MODE =", mode)
+    print("LOG+++++ CALIBRATE ESTIMATE MODE")
     print("LOG+++++ Corrupt =", corrupt)
     print("LOG+++++ Per_Channel =", per_channel)
 
     net = get_network(args) 
     net.load_state_dict(torch.load(args.weights, map_location=torch.device('cpu')))
     net.eval()
-
-    cifar100_test_loader = get_test_dataloader(
-        settings.CIFAR100_MEAN,
-        settings.CIFAR100_STD,
-        corrupt=corrupt,
-        num_workers=4,
-        batch_size=args.b,
-    )
 
     cifar100_cal_loader = get_cal_dataloader(
         settings.CIFAR100_MEAN,
@@ -110,11 +98,11 @@ if __name__ == '__main__':
             'def': {'per_channel':per_channel},
             QuantMode.ESTIMATE: {
                 'Conv2d': {
-                    'e_std': c_std,
+                    'e_std': None,
                     'sampling_stride': sampling_stride,
                 },
                 'Linear': {
-                    'e_std': l_std
+                    'e_std': None
                 }
             },
             QuantMode.STATIC: {'cal_size': cal_size}
@@ -124,61 +112,52 @@ if __name__ == '__main__':
             '23': {'skip': True},
         }
     }
-    if mode == 1:
-        net = convert_model(
-            net,
-            mode=QuantMode.ESTIMATE,
-            config=confss
-        )
-        
-        #GRID SEARCH TO FIND OPTIMAL PARAMETERS
 
-    elif mode == 2:
-        net = convert_model(
-            net,
-            mode=QuantMode.DYNAMIC,
-            config=confss
-        )
+    # Define the parameter grid for e_std values
+    conv_stds = list(range(2, 50, 4))
+    linear_stds = list(range(2, 50, 4))
+
+    best_acc_1 = 0.0
+    best_params = {'conv_std': None, 'linear_std': None}
+    best_correct_1 = 0
+    best_correct_5 = 0
+
+    # Perform grid search over all parameter combinations
+    for conv_std in conv_stds:
+        for linear_std in linear_stds:
+            # Create a deep copy of the original config to avoid side effects
+            current_conf = copy.deepcopy(confss)
+            current_conf['global'][QuantMode.ESTIMATE]['Conv2d']['e_std'] = conv_std
+            current_conf['global'][QuantMode.ESTIMATE]['Linear']['e_std'] = linear_std
+            
+            # Convert the model with current parameters
+            c_net = convert_model(net, mode=QuantMode.ESTIMATE, config=current_conf)
+            
+            # Evaluate the model
+            correct_1, correct_5 = test_loop(c_net, cifar100_cal_loader, args, desc=f"Cal ({conv_std}, {linear_std})")
+            acc_1 = correct_1 / len(cifar100_cal_loader.dataset)
+            
+            # Update best results if current accuracy is higher
+            if acc_1 > best_acc_1:
+                best_acc_1 = acc_1
+                best_params['conv_std'] = conv_std
+                best_params['linear_std'] = linear_std
+                best_correct_1 = correct_1
+                best_correct_5 = correct_5
     
-    elif mode == 3:
-        net = convert_model(
-            net,
-            mode=QuantMode.STATIC,
-            config=confss
-        )
+    print(best_params)
 
-        for (image, label) in tqdm(cifar100_cal_loader, desc="CALIBRATING", total=len(cifar100_cal_loader)):            
-            output = net(image)
+    # Update the original config with the best parameters
+    confss['global'][QuantMode.ESTIMATE]['Conv2d']['e_std'] = best_params['conv_std']
+    confss['global'][QuantMode.ESTIMATE]['Linear']['e_std'] = best_params['linear_std']
+
+    # Convert the final model using the best parameters
+    c_net = convert_model(net, mode=QuantMode.ESTIMATE, config=confss)
+
+    # Calculate the final accuracy metrics
+    correct_1, correct_5 = best_correct_1, best_correct_5
+    acc_1 = float(correct_1 / len(cifar100_cal_loader.dataset))
+    acc_5 = float(correct_5 / len(cifar100_cal_loader.dataset))
+
+
     
-    correct_1, correct_5 = test_loop(net, cifar100_test_loader, args)
-
-    if args.gpu:
-        print('GPU INFO.....')
-        print(torch.cuda.memory_summary(), end='')
-    
-    acc_1 = float(correct_1 / len(cifar100_test_loader.dataset))
-    acc_5 = float(correct_5 / len(cifar100_test_loader.dataset))
-
-    print()
-    print("Top 1 Acc: ", acc_1)
-    print("Top 5 Acc: ", acc_5)
-    print("Parameter numbers: {}".format(sum(p.numel() for p in net.parameters())))
-
-    results_log = f"results/{str(QuantMode(mode)).split('.')[1]}__corr_{corrupt}_per_channel_{per_channel}"
-    if mode==0:
-        results_log = f"{results_log.split('_per_channel_')[0]}"
-    os.makedirs(results_log, exist_ok=True)
-
-    results_file = f"{args.net}_.json"
-    if mode==1: #se estimate aggiungo il sampling stride al nome del file
-        results_file = f"{results_file.split('.json')[0]}_stride_{sampling_stride}_c{c_std}_l{l_std}.json"
-    if mode==3: #se static aggiungo il cal_size al nome del file
-        results_file = f"{results_file.split('.json')[0]}_cal_{cal_size}.json"
-        
-    results = [{"top1": acc_1, "top5": acc_5}]
-
-    with open(os.path.join(results_log, results_file), "w") as fout:
-        json.dump(results, fout)
-
-    print()
-    print(f"++++++ Saved results in {os.path.join(results_log, results_file)}")

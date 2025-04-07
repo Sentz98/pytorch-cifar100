@@ -15,6 +15,7 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
+from corrupt import CorruptTransform
 
 def get_network(args):
     """ return given network
@@ -183,35 +184,78 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
-    #cifar100_training = CIFAR100Train(path, transform=transform_train)
+
     cifar100_training = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_train)
     cifar100_training_loader = DataLoader(
         cifar100_training, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size)
 
     return cifar100_training_loader
 
-def get_test_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True):
+def get_test_dataloader(mean, std, corrupt=False, batch_size=16, num_workers=2, shuffle=True):
     """ return training dataloader
     Args:
         mean: mean of cifar100 test dataset
         std: std of cifar100 test dataset
-        path: path to cifar100 test python dataset
         batch_size: dataloader batchsize
         num_workers: dataloader num_works
         shuffle: whether to shuffle
     Returns: cifar100_test_loader:torch dataloader object
     """
 
-    transform_test = transforms.Compose([
+    if corrupt:
+            transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            CorruptTransform(None, (3,5)),
+            transforms.Normalize(mean, std)
+        ])
+    else:
+        transform_test = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
-    #cifar100_test = CIFAR100Test(path, transform=transform_test)
+
+    
+
     cifar100_test = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
     cifar100_test_loader = DataLoader(
         cifar100_test, shuffle=shuffle, num_workers=num_workers, batch_size=batch_size)
 
     return cifar100_test_loader
+
+def get_cal_dataloader(mean, std, cal_size, batch_size=16, num_workers=2, shuffle=True):
+    """Return a calibration dataloader as a random subset of the train dataset.
+    
+    Args:
+        mean: Mean of the dataset for normalization.
+        std: Standard deviation of the dataset for normalization.
+        cal_size: Number of images in the calibration subset.
+        batch_size: Batch size for the DataLoader.
+        num_workers: Number of workers for data loading.
+        shuffle: Whether to shuffle the calibration data.
+    Returns:
+        cifar100_cal_loader: Calibration DataLoader.
+    """
+    transform_cal = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std)
+    ])
+    
+    cifar100_cal = torchvision.datasets.CIFAR100(
+        root='./data', train=True, download=True, transform=transform_cal
+    )
+    
+    # Generate random indices for the calibration subset
+    indices = torch.randperm(len(cifar100_cal))[:cal_size]
+    cal_subset = torch.utils.data.Subset(cifar100_cal, indices)
+    
+    cifar100_cal_loader = DataLoader(
+        cal_subset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    
+    return cifar100_cal_loader
 
 def compute_mean_std(cifar100_dataset):
     """compute the mean and std of cifar100 dataset
