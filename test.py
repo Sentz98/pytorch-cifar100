@@ -131,7 +131,8 @@ if __name__ == '__main__':
             config=confss
         )
         
-        #GRID SEARCH TO FIND OPTIMAL PARAMETERS
+        for (image, label) in tqdm(cifar100_cal_loader, desc="CALIBRATING", total=len(cifar100_cal_loader)):            
+            output = net(image)
 
     elif mode == 2:
         net = convert_model(
@@ -149,6 +150,8 @@ if __name__ == '__main__':
 
         for (image, label) in tqdm(cifar100_cal_loader, desc="CALIBRATING", total=len(cifar100_cal_loader)):            
             output = net(image)
+    
+    net.eval()
     
     correct_1, correct_5 = test_loop(net, cifar100_test_loader, args)
 

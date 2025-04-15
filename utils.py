@@ -222,7 +222,7 @@ def get_test_dataloader(mean, std, corrupt=False, batch_size=16, num_workers=2, 
 
     return cifar100_test_loader
 
-def get_cal_dataloader(mean, std, cal_size, batch_size=16, num_workers=2, shuffle=True):
+def get_cal_dataloader(mean, std, cal_size, batch_size=16, num_workers=2, seed=42):
     """Return a calibration dataloader as a random subset of the train dataset.
     
     Args:
@@ -231,7 +231,8 @@ def get_cal_dataloader(mean, std, cal_size, batch_size=16, num_workers=2, shuffl
         cal_size: Number of images in the calibration subset.
         batch_size: Batch size for the DataLoader.
         num_workers: Number of workers for data loading.
-        shuffle: Whether to shuffle the calibration data.
+        seed: Random seed for reproducibility.
+    
     Returns:
         cifar100_cal_loader: Calibration DataLoader.
     """
@@ -244,14 +245,18 @@ def get_cal_dataloader(mean, std, cal_size, batch_size=16, num_workers=2, shuffl
         root='./data', train=True, download=True, transform=transform_cal
     )
     
+    # Set random seed for reproducibility
+    g = torch.Generator()
+    g.manual_seed(seed)
+
     # Generate random indices for the calibration subset
-    indices = torch.randperm(len(cifar100_cal))[:cal_size]
+    indices = torch.randperm(len(cifar100_cal), generator=g)[:cal_size]
     cal_subset = torch.utils.data.Subset(cifar100_cal, indices)
     
     cifar100_cal_loader = DataLoader(
         cal_subset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=False,
         num_workers=num_workers
     )
     

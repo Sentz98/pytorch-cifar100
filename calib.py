@@ -72,6 +72,8 @@ if __name__ == '__main__':
 
     sampling_stride = eval(os.getenv("s_s", "1")) 
 
+    range_std = eval(os.getenv("s_s", "(5, 25, 5)"))
+
     cal_size = eval(os.getenv("cal_size", "256"))
     verb = eval(os.getenv("verb", "0"))
 
@@ -114,9 +116,9 @@ if __name__ == '__main__':
     }
 
     # Define the parameter grid for e_std values
-    conv_stds = list(range(2, 50, 4))
-    linear_stds = list(range(2, 50, 4))
-
+    conv_stds = list(range(range_std[0], range_std[1], range_std[2]))
+    linear_stds = list(range(range_std[0], range_std[1], range_std[2]))
+    
     best_acc_1 = 0.0
     best_params = {'conv_std': None, 'linear_std': None}
     best_correct_1 = 0
